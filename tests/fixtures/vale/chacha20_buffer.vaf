@@ -1,0 +1,18 @@
+module ChaCha20_State_Buffer;
+
+target aarch64;
+feature crypto, dit;
+
+procedure chacha20_load_quarter(
+    mut state: buffer<uint32>[16] @ r0
+)
+    modifies
+        r1; r2; r3; r4;
+{
+    r1 := state[0];
+    r2 := state[4];
+    r3 := state[8];
+    r4 := state[12];
+    Add(r1, r1, r2);
+    state[0] := r1;
+}

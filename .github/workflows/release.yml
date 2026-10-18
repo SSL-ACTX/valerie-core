@@ -1,0 +1,168 @@
+name: Release Valerie Core
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.arch == 'x86_64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            arch: x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            arch: x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            arch: aarch64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            arch: aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.3.0"
+          cache: false
+
+      - name: Install Opam Dependencies
+        run: |
+          opam install -y dune zarith stdint batteries menhir menhirLib ppx_deriving ppx_deriving_yojson yojson uucp visitors wasm fix
+
+      - name: Download Pre-built FStar (${{ matrix.arch }})
+        shell: bash
+        run: |
+          FSTAR_VER="v2026.10.11"
+          TARBALL="fstar-${FSTAR_VER}-Linux-${{ matrix.arch }}.tar.gz"
+          URL="https://github.com/FStarLang/FStar/releases/download/${FSTAR_VER}/${TARBALL}"
+          echo "Fetching pre-built FStar from $URL..."
+          curl -fsSL "$URL" | tar -xz
+          mkdir -p dist/bin
+
+      - name: Build valerie-compiler with ocamlopt
+        shell: bash
+        run: |
+          eval $(opam env)
+          FSTAR_LIB="$(pwd)/fstar/lib/fstar/lib"
+
+          # Clean any tracked pre-existing .cmi/.cmx compiled under different OCaml/OS versions
+          find src dist/parser -name "*.cmi" -o -name "*.cmx" -o -name "*.o" -o -name "*.a" -o -name "*.cmxa" | xargs rm -f
+
+          echo "Compiling parser..."
+          mkdir -p build_parser
+          cp src/parser/ast.ml src/parser/parse_util.ml src/parser/ast_util.ml build_parser/
+          cp dist/parser/parse.mli dist/parser/parse.ml dist/parser/lex.ml build_parser/
+          cd build_parser
+          ocamlfind ocamlopt -c -g -package zarith,batteries,stdint,str -I . \
+            ast.ml parse_util.ml ast_util.ml parse.mli parse.ml lex.ml
+          ocamlfind ocamlopt -a -o valerie_parser.cmxa \
+            ast.cmx parse_util.cmx ast_util.cmx parse.cmx lex.cmx
+          cd ..
+          mkdir -p dist/parser
+          cp build_parser/valerie_parser.* build_parser/*.cmi dist/parser/
+
+          echo "Compiling and linking native valerie-compiler binary..."
+          ocamlfind ocamlopt -g -linkpkg \
+            -package zarith,stdint,batteries,str,ppx_deriving_yojson.runtime \
+            -I "$FSTAR_LIB" -I dist/ocaml -I dist/parser -I src/parser \
+            "$FSTAR_LIB/fstar.cmxa" \
+            dist/parser/valerie_parser.cmxa \
+            dist/ocaml/FStar_UInt128.ml \
+            dist/ocaml/FStar_Int_Cast.ml \
+            dist/ocaml/Valerie_Defs.ml \
+            dist/ocaml/Valerie_AArch64_Machine.ml \
+            dist/ocaml/Valerie_AArch64_Semantics.ml \
+            dist/ocaml/Valerie_Arm32_Machine.ml \
+            dist/ocaml/Valerie_Arm32_Semantics.ml \
+            dist/ocaml/Valerie_X64_Machine.ml \
+            dist/ocaml/Valerie_X64_Semantics.ml \
+            dist/ocaml/Valerie_Compiler_AST.ml \
+            src/parser/ast_bridge.ml \
+            dist/ocaml/Valerie_Compiler_Lower_AArch64.ml \
+            dist/ocaml/Valerie_Compiler_EmitAsm_AArch64.ml \
+            dist/ocaml/Valerie_Compiler_Lower_Arm32.ml \
+            dist/ocaml/Valerie_Compiler_EmitAsm_Arm32.ml \
+            dist/ocaml/Valerie_Compiler_Lower_X64.ml \
+            dist/ocaml/Valerie_Compiler_EmitAsm_X64.ml \
+            dist/ocaml/Valerie_Riscv64_Machine.ml \
+            dist/ocaml/Valerie_Riscv64_Semantics.ml \
+            dist/ocaml/Valerie_Compiler_Lower_Riscv64.ml \
+            dist/ocaml/Valerie_Compiler_EmitAsm_Riscv64.ml \
+            dist/ocaml/Valerie_Compiler_Validate.ml \
+            dist/ocaml/Valerie_Compiler_Print.ml \
+            dist/ocaml/Valerie_Compiler_EmitFStar.ml \
+            dist/ocaml/Valerie_Compiler_EmitPulse.ml \
+            dist/ocaml/Valerie_Compiler_EmitVaf.ml \
+            dist/ocaml/Valerie_Compiler_Desugar.ml \
+            dist/ocaml/Valerie_Compiler_Driver.ml \
+            src/main.ml \
+            -o dist/bin/valerie-compiler
+
+          strip dist/bin/valerie-compiler 2>/dev/null || true
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          PKG_NAME="valerie-compiler-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          STAGING="release-staging/${PKG_NAME}"
+          mkdir -p "${STAGING}/bin"
+
+          cp "dist/bin/valerie-compiler" "${STAGING}/bin/"
+          chmod +x "${STAGING}/bin/valerie-compiler"
+
+          [ -f "README.md" ] && cp "README.md" "${STAGING}/"
+          [ -f "LICENSE" ] && cp "LICENSE" "${STAGING}/"
+
+          mkdir -p release-dist
+          tar -czf "release-dist/${PKG_NAME}.tar.gz" -C release-staging "${PKG_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: release-dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 Checksums
+        working-directory: release-artifacts
+        run: |
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*.tar.gz
+            release-artifacts/checksums.txt
+          generate_release_notes: true

@@ -1,0 +1,115 @@
+[package]
+name = "valerie-core"
+version = "0.1.0-alpha.1"
+license = "AGPL-3.0"
+authors = ["Seuriin <seuriin@gmail.com>", "Iris-Seravelle <iris.seravelle@gmail.com>"]
+edition = "2026"
+description = "Next-Generation Verified Assembly Framework in F* & Pulse"
+
+[toolchain]
+vale = "dist/valerie-compiler"
+fstar = "auto"
+clang = "auto"
+
+[target.aarch64-linux]
+features = ["+crypto"]
+# dit = true
+assembler = "native"
+
+[target.x86_64-linux]
+features = ["+aes", "+pclmul"]
+assembler = "auto"
+
+[target.riscv64-linux]
+features = ["+zk"]
+assembler = "auto"
+
+[verification]
+cache-dir = ".cache"
+hints-dir = "hints"
+warn-error = "-271-272-241-247"
+already-cached = ["Prims", "FStar", "LowStar", "PulseCore", "Pulse"]
+include = ["src/spec", "src/proof", "src/pulse", "src/compiler"]
+
+[verification.pulse]
+enabled = true
+
+[extraction.c]
+output-dir = "dist"
+minimal-headers = true
+warn-error = "-2-10-15"
+
+[[extraction.c.bundle]]
+name = "Valerie_Compiler_Driver"
+modules = [
+  "Valerie.Compiler.Driver",
+  "Valerie.Compiler.AST",
+  "Valerie.Compiler.Desugar",
+  "Valerie.Compiler.Lower",
+  "Valerie.Compiler.Lower.AArch64",
+  "Valerie.Compiler.Lower.Arm32",
+  "Valerie.Compiler.Lower.X64",
+  "Valerie.Compiler.Lower.Riscv64",
+  "Valerie.Compiler.Print",
+  "Valerie.Compiler.Validate",
+  "Valerie.Compiler.EmitVaf",
+  "Valerie.Compiler.EmitFStar"
+]
+headers = ["stdint.h", "stdbool.h"]
+
+[tasks.compiler]
+description = "Build and link the native verified valerie-compiler binary"
+dependencies = ["verify"]
+
+[tasks.compiler.ocaml-bin]
+entry = "src/main.ml"
+output = "dist/valerie-compiler"
+modules-dir = "dist/ocaml"
+bridge = "src/parser/ast_bridge.ml"
+cc = "clang"
+strip = true
+packages = ["zarith", "stdint", "batteries", "str", "ppx_deriving_yojson.runtime"]
+includes = ["$FSTAR_LIB", "dist/ocaml", "dist/parser", "src/parser"]
+libraries = [
+  "$FSTAR_LIB/fstar.cmxa",
+  "dist/parser/valerie_parser.cmxa"
+]
+modules = [
+  "Valerie_Defs",
+  "Valerie_AArch64_Machine",
+  "Valerie_AArch64_Semantics",
+  "Valerie_Arm32_Machine",
+  "Valerie_Arm32_Semantics",
+  "Valerie_X64_Machine",
+  "Valerie_X64_Semantics",
+  "Valerie_Compiler_AST",
+  "Valerie_Compiler_Lower_AArch64",
+  "Valerie_Compiler_EmitAsm_AArch64",
+  "Valerie_Compiler_Lower_Arm32",
+  "Valerie_Compiler_EmitAsm_Arm32",
+  "Valerie_Compiler_Lower_X64",
+  "Valerie_Compiler_EmitAsm_X64",
+  "Valerie_Riscv64_Machine",
+  "Valerie_Riscv64_Semantics",
+  "Valerie_Compiler_Lower_Riscv64",
+  "Valerie_Compiler_EmitAsm_Riscv64",
+  "Valerie_Compiler_Validate",
+  "Valerie_Compiler_Print",
+  "Valerie_Compiler_EmitFStar",
+  "Valerie_Compiler_EmitPulse",
+  "Valerie_Compiler_EmitVaf",
+  "Valerie_Compiler_Desugar",
+  "Valerie_Compiler_Driver"
+]
+
+[tasks.compiler.ocaml-bin.parser]
+dir = "src/parser"
+output-dir = "dist/parser"
+mly = "parse.mly"
+mll = "lex.mll"
+sources = ["ast.ml", "parse_util.ml", "ast_util.ml", "parse.mli", "parse.ml", "lex.ml"]
+archive = "valerie_parser.cmxa"
+
+[tasks.suite]
+description = "Run the Vale compiler test suite"
+run = "$VALERIE_EXE test"
