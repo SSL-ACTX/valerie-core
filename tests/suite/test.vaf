@@ -1,0 +1,119 @@
+include "../../../fstar/code/arch/x64/X64.Vale.InsBasic.vaf"
+include{:fstar}{:open} "TestFStar"
+include{:fstar}{:open} "FStar.Seq.Base"
+
+module Test
+
+#verbatim{:interface}{:implementation}
+open X64.Machine_s
+open X64.Vale.Decls
+open X64.Vale.InsBasic
+open FStar.Seq
+#endverbatim
+
+procedure p()
+    modifies
+        rax; efl;
+    requires
+        0 <= rax < 10 <= 11;
+    ensures
+        rax == old(rax) + 4;
+{
+    Add64Wrap(rax, 2);
+    Add64Wrap(rax, 2);
+}
+
+#verbatim{:implementation}
+let double (x:int):int = x + x
+#endverbatim
+
+function double (x:int):int extern;
+
+procedure Calls()
+    {:typecheck}
+    requires
+        rax < 7;
+    modifies
+        rax; rbx; efl;
+    ensures
+        rax == old(rax) + 7;
+{
+    Add64Wrap(rax, 1);
+    ghost var z:int := rax;
+    Mov64(rbx, #nat64(double(1)));
+    assert rbx == 2;
+    assert z == rax;
+    if (rbx == 2)
+    {
+        Add64Wrap(rax, rbx);
+        if (rbx == 3)
+        {
+            let dummy := 2;
+            Add64Wrap(rax, rbx);
+            z := z + 2;
+        }
+        z := z + 2;
+    }
+    assert z == rax;
+    p();
+}
+
+procedure Ghosts(ghost g1:int) returns(ghost g2:int)
+    ensures
+        g2 == g1 + 1;
+{
+    g2 := g1 + 1;
+}
+
+function operator([]) #[a:Type(0)](s:FStar.Seq.Base.seq(a), i:int):a extern;
+function operator([:=]) #[a:Type(0)](s:FStar.Seq.Base.seq(a), i:int, v:a):FStar.Seq.Base.seq(a) extern;
+function operator([]) #[a:Type(0), b:Type(0)](m:FStar.Map.t(a, b), i:a):b extern;
+function operator(?[]) #[a:Type(0), b:Type(0)](m:FStar.Map.t(a, b), i:a):prop extern;
+function operator([:=]) #[a:Type(0), b:Type(0)](m:FStar.Map.t(a, b), i:a, v:b):FStar.Map.t(a, b) extern;
+
+#verbatim{:implementation}
+let va_subscript_FStar__Seq__Base__seq = Seq.index
+let va_update_FStar__Seq__Base__seq = Seq.upd
+let va_subscript_FStar__Map__t = Map.sel
+let va_update_FStar__Map__t = Map.upd
+let va_contains_FStar__Map__t = Map.contains
+#endverbatim
+
+procedure SeqIndex(ghost s:seq(int), ghost i:int, ghost v:int) returns(ghost r:int) 
+{
+    let ns := if i > 0  && i < length(s) then s[i := v] else s;
+    r := if i > 0  && i < length(s) then ns[i] else 0;
+    assert r == v || r == 0;
+}
+
+procedure MapIndex(ghost m:FStar.Map.t(int, int), ghost i:int, ghost v:int) returns(ghost r:int) 
+{
+    let nm := m[i:=v];
+    r := nm[i];
+    assert nm?[i] && r == v;
+}
+
+procedure Test() returns(ghost g:int)
+    {:typecheck}
+{
+    let f:fun(int) -> int := fun(x:int) x + 1;
+    let a:int := f(10);
+    assert a == 11;
+    g := f(11);
+    assert g == 12;
+    assert (fun(x:int) x + 1)(12) == 13;
+}
+
+procedure CodeOnlyProcedure()
+    {:codeOnly}
+    ensures
+        false; // Since we are only generating the code, the postcondition is irrelevant
+{
+    Add64Wrap(rax, 1);
+    Add64Wrap(rax, 1);
+}
+
+#verbatim{:implementation}
+let test_codeonlyprocedure1 () : unit =
+  assert (va_code_CodeOnlyProcedure == va_code_CodeOnlyProcedure) // Check that it is defined
+#endverbatim

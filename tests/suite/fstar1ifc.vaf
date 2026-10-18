@@ -1,0 +1,191 @@
+include "common.vaf"
+module Fstar1ifc
+
+#verbatim
+open Common
+#endverbatim
+
+procedure Imm(out x:reg, inline y:int)
+    {:terminates}
+    ensures
+        x == y;
+{
+    assume false;
+}
+
+procedure Increment(inout x:reg)
+    {:terminates}
+    ensures
+        x == old(x) + 1;
+{
+    assume false;
+}
+
+procedure Add(inout x:reg, in y:reg)
+    {:terminates}
+    ensures
+        x == old(x + y);
+{
+    assume false;
+}
+
+procedure AddReg(inout x:reg, in y:reg)
+    {:terminates}
+    ensures
+        x == old(x + y);
+{
+    Add(x, y); // coerces y from register to operand
+}
+
+procedure p()
+    {:terminates}
+    modifies
+        eax;
+    requires
+        eax >= 0;
+    ensures
+        eax >= 2;
+{
+    Increment(eax);
+    Increment(eax);
+}
+
+procedure Calls()
+    {:terminates}
+    modifies
+        eax; ebx;
+    ensures
+        eax == old(eax) + 3;
+{
+    Increment(eax);
+    Imm(ebx, double(1));
+    assert ebx == 2;
+    ghost if (ebx <= ebx)
+    {
+        assert 2 == 2;
+    }
+    if (ebx <= ebx)
+    {
+        Add(eax, ebx);
+    }
+    assert 1 + 2 == 3 by { assert 1 + 2 == 2 + 1; }
+//    forall x:int, y:int {x + y} :| x >= 0 && y >= 0 :: x + y == y + x
+//    {
+//        assert x + y >= 0;
+//        ghost if (x < y)
+//        {
+//            assert x <= y;
+//        }
+//    }
+}
+
+procedure WhileTest()
+    {:terminates}
+    modifies
+        eax; ebx;
+    requires
+        0 <= eax <= ebx;
+    ensures
+        0 <= eax <= ebx + 1;
+        2 * ebx - eax == old(2 * ebx - eax);
+        eax > ebx;
+{
+    while (eax <= ebx)
+        invariant
+            0 <= eax <= ebx + 1;
+            2 * ebx - eax == old(2 * ebx - eax);
+        decreases 99, 1 + ebx - eax, true, 100;
+    {
+        Increment(eax);
+        Increment(eax);
+        Increment(ebx);
+    }
+}
+
+procedure Ghosts(ghost g1:int) returns(ghost g2:int)
+    {:terminates}
+    ensures
+        g2 == g1 + 1;
+{
+    assert opaque_double(3) == 6 by { reveal opaque_double; }
+    assert opaque_double(3) == 6;
+    //assert opaque_double(4) == 8;
+    g2 := g1 + 1;
+}
+
+type string:Type(0) {:primitive} extern;
+const _"`%prop":string extern;
+
+procedure StringNames()
+{
+    let s:string := _"`%prop";
+}
+
+#verbatim
+//type int_pair = | IntPair : fst:int -> snd:int -> int_pair
+type int_pair = {fst:int; snd:int}
+let seq = Seq.seq
+let length = Seq.length
+
+let va_subscript_seq (#a:Type0) (s:seq a) (i:nat) : Pure a
+  (requires i < length s)
+  (ensures fun _ -> True)
+  =
+  Seq.index s i
+
+let va_update_seq (#a:Type0) (s:seq a) (i:nat) (v:a) : Pure (seq a)
+  (requires i < length s)
+  (ensures fun _ -> True)
+  =
+  Seq.upd s i v
+
+let va_contains_map (#a:eqtype) (#b:Type0) (m:map a b) (k:a) : bool =
+  Map.contains m k
+
+let va_subscript_map = Map.sel
+#endverbatim
+
+type nat:Type(0) := int_range(0, _);
+
+type int_pair:Type(0) extern;
+function Mkint_pair(fst:int, snd:int):int_pair extern;
+function operator(.fst) (p:int_pair):int extern;
+function operator(.snd) (p:int_pair):int extern;
+function operator(.fst :=) (p:int_pair, v:int):int_pair extern;
+function operator(.snd :=) (p:int_pair, v:int):int_pair extern;
+
+type seq(a:Type(0)):Type(0) extern;
+type map(a:Type(0), b:Type(0)):Type(0) extern;
+
+function length#[a:Type(0)](s:seq(a)):nat extern;
+
+function operator([]) #[a:Type(0)](s:seq(a), i:int):a extern;
+function operator([ := ]) #[a:Type(0)](s:seq(a), i:int, v:a):seq(a) extern;
+function operator([]) #[a:Type(0), b:Type(0)](m:map(a, b), key:a):b extern;
+function operator([ := ]) #[a:Type(0), b:Type(0)](m:map(a, b), key:a, v:b):map(a, b) extern;
+function operator(?[]) #[a:Type(0), b:Type(0)](m:map(a, b), key:a):bool extern;
+
+ghost procedure test_overload(ghost s:seq(nat), ghost m:map(int, nat))
+    requires
+        length(s) > 3;
+{
+    let x := Mkint_pair(10, 20);
+    assert x.fst == 10;
+    assert x.snd == 20;
+//    let x2 := x.(fst := 11);
+//    assert x2.fst == 11;
+//    assert x2.snd == 20;
+
+    let s2:seq(nat) := s[3 := 30];
+    assert s2[3] == 30;
+
+    assert m?[100] ==> m[100] >= 0;
+}
+
+procedure test_options()
+    {:restartProver}
+    {:options z3rlimit(20), initial_fuel(2), max_fuel(3), max_ifuel(2),
+        smtencoding.nl_arith_repr(boxwrap), using_facts_from("* -FStar.Seq.Base"),
+        debug(FStar.Seq.Base)}
+{
+}

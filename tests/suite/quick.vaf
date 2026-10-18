@@ -1,0 +1,538 @@
+include "../../../fstar/code/arch/x64/X64.Vale.InsBasic.vaf"
+
+module Quick
+
+#verbatim{:interface}{:implementation}
+open Defs_s
+open Words_s
+open X64.Machine_s
+open X64.Vale
+open X64.Vale.State
+open X64.Vale.Decls
+open X64.Vale.InsBasic
+open X64.Vale.QuickCode
+open X64.Vale.QuickCodes
+#endverbatim
+
+/*
+#verbatim
+[@"opaque_to_smt" va_qattr]
+let codes_bench : codes = [
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  va_code_Add64 (OReg Rax) (OConst 1);
+  ]
+
+[@"opaque_to_smt" va_qattr]
+let wpCodes_bench : quickCodes unit codes_bench =
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+  QSeq (va_quick_Add64 (OReg Rax) (OConst 1)) (
+
+  QEmpty ()
+  )))))
+  )))))
+  )))))
+  )))))
+
+//#reset-options "--debug Quick --debug_level SMTQuery"
+
+let lemma_bench1 (s0:state) : Ghost (state * fuel)
+  (requires
+    s0.ok /\
+    s0.regs Rax < 100
+  )
+  (ensures fun (sN, f0) ->
+    eval (Block codes_bench) s0 f0 sN /\
+    sN.ok /\
+    sN.regs Rax == s0.regs Rax + 20 /\
+    va_state_eq sN (va_update_reg Rax sN (va_update_flags sN s0))
+  )
+  =
+(*
+  let (sN, f0, ()) = wp_sound_norm codes_bench wpCodes_bench s0
+    (fun s0 sN () ->
+      sN.ok /\
+      sN.regs Rax == s0.regs Rax + 20 /\
+      va_state_match sN (va_update_reg Rax sN (va_update_flags sN s0))
+    )
+    in
+*)
+  let (sN, f0, ()) = wp_run_norm codes_bench wpCodes_bench s0
+    (fun (s0:state) (sN:state) -> va_update_reg Rax sN (va_update_flags sN s0))
+    (fun (sN:state) (sN':state) -> eval_reg Rax sN == eval_reg Rax sN' /\ sN.flags == sN'.flags)
+    in
+//  let (sN, f0, ()) = wp_run_norm codes_bench wpCodes_bench s0 in
+  (sN, f0)
+//#reset-options ""
+#endverbatim
+*/
+
+#verbatim{:interface}
+let rec self_int (i:int) : int = if i <= 0 then i else 1 + self_int (i - 1)
+#endverbatim
+
+function self_int (i:int) : int extern;
+
+#verbatim
+let rec lemma_self_int (i:int) : Lemma
+  (requires 0 <= i)
+  (ensures self_int i == i)
+  =
+  if 0 < i then lemma_self_int (i - 1)
+
+let va_assert (p:Type0) : Lemma (requires p) (ensures p) = ()
+let va_assume (p:Type0) : Lemma (requires True) (ensures p) = assume p
+
+let ghost_return_one (a:int) : Pure int
+  (requires a >= 0)
+  (ensures fun x -> x == a)
+  =
+  a
+
+let ghost_return_multi (a b:int) : Pure (int & int)
+  (requires a >= 0 /\ b >= 0)
+  (ensures fun (x, y) -> x == a /\ y == b)
+  =
+  (a, b)
+#endverbatim
+
+ghost procedure lemma_self_int(ghost i:int)
+    requires
+        0 <= i;
+    ensures
+        self_int(i) == i;
+    extern;
+
+ghost procedure ghost_return_one(ghost a:int) returns(ghost x:int)
+    requires
+        a >= 0;
+    ensures
+        x == a;
+    extern;
+
+ghost procedure ghost_return_multi(ghost a:int, ghost b:int) returns(ghost x:int, ghost y:int)
+    requires
+        a >= 0;
+        b >= 0;
+    ensures
+        x == a;
+        y == b;
+    extern;
+
+procedure proc_return_multi(ghost a:int, ghost b:int) returns(ghost x:int, ghost y:int)
+    {:quick}
+    requires
+        a >= 0;
+        b >= 0;
+    ensures
+        x == a;
+        y == b;
+{
+    x := a;
+    y := b;
+}
+
+/*
+procedure CallMulti(ghost a:int)
+    {:quick}
+    requires
+        a == 3;
+{
+    let x0 := ghost_return_one(a);
+    assert x0 == 3;
+//    let (x1, y1) := ghost_return_multi(a, 4);
+//    assert x1 == 3;
+//    assert y1 == 4;
+//    let (x2, y2) := proc_return_multi(3, 4);
+//    assert x2 == 3;
+//    assert y2 == 4;
+}
+*/
+
+#verbatim
+let f_nat (n:nat) : int = n
+let lemma_test_subtype (n:nat) (b:Type0) (i:int) (p:pos) : Lemma
+  (requires n > 4)
+  (ensures n > 3)
+  =
+  ()
+#endverbatim
+
+function f_nat(n:nat):int extern;
+ghost procedure lemma_test_subtype(ghost n:nat, ghost b:prop, ghost i:int, ghost p:pos)
+    requires n > 4;
+    ensures n > 3;
+    extern;
+
+procedure test_subtype(ghost m:pos, ghost b:prop/*TODO:bool*/, ghost i:int)
+    {:quick}
+    requires
+        m > 4;
+        i > 4;
+    ensures m > 3;
+{
+    lemma_test_subtype(m, b, f_nat(m), m);
+    let x := #(int_range(3, _))(m);
+    let y := #pos(i);
+//    lemma_test_subtype(7, True/*TODO:true*/, f_nat(7), 7);
+}
+
+procedure Incr3Quick()
+    {:quick}
+    modifies
+        efl;
+        rax;
+    requires
+        rax < 100;
+{
+    Add64(rax, 1);
+    Add64(rax, 1);
+    Add64(rax, 1);
+}
+
+procedure Add64Ghosts(
+        inout dst:dst_opr64,
+        in src:opr64,
+        inline i:int,
+        ghost g1:int,
+        ghost g2:int)
+    returns(
+        ghost h1:int,
+        ghost h2:int)
+    {:quick exportOnly}
+    modifies
+        efl;
+    requires
+        i > 2;
+        g1 == src;
+        g2 > 3;
+        src + dst < pow2_64;
+    ensures
+        h1 == g1;
+        h2 > 4;
+        dst == old(dst + src);
+{
+    h1 := g1;
+    h2 := g2 + 1;
+    Add64(dst, src);
+}
+
+#verbatim
+let ghostId (x:int) : GTot int = x
+#endverbatim
+
+function ghostId (x:int) : int extern;
+
+procedure Bump3(inline b:bool, ghost g1:int) returns(ghost g2:int)
+    {:quick}
+//    {:options debug(Quick), debug_level(SMTQuery)}
+    modifies
+        efl;
+        rax;
+    requires
+        rax < 100;
+        g1 == rax;
+    ensures
+        rax == old(rax) + self_int(3);
+        g2 == old(rax);
+{
+    inline if (b)
+    {
+        Add64(rax, 1);
+        Add64(rax, 1);
+    }
+    else
+    {
+        Add64(rax, 2);
+    }
+    assert self_int(3) == 3 by { lemma_self_int(ghostId(3)); }
+    lemma_self_int(g1 + 1);
+    lemma_self_int(old(rax));
+    assert rax == old(rax) + 2;
+    ghost var gtmp := g1 + rax;
+    g2 := 0 - rax;
+    if (rax < 7)
+    {
+        Add64(rax, 1);
+        Add64(rax, 0);
+        g2 := g2 + gtmp;
+        gtmp := gtmp + 1;
+    }
+    else
+    {
+        Add64(rax, 0);
+        Add64(rax, 1);
+        g2 := g2 + gtmp;
+        gtmp := gtmp + 1;
+    }
+    assert gtmp == g1 + rax;
+    assert g2 == old(rax);
+}
+
+procedure CallBump3(inline b:bool, ghost g1:int) returns(ghost g2:int)
+    {:quick}
+    modifies
+        efl;
+        rax;
+    requires
+        rax < 100;
+        g1 == rax;
+    ensures
+        rax == old(rax) + self_int(3);
+        g2 == old(rax);
+{
+    Add64(rax, 0);
+    g2 := Bump3(b, if rax < 7 then (let r:int := rax in r) else g1 + 0);
+}
+
+procedure AddRaxG(ghost g:int)
+    {:quick}
+    modifies
+        efl;
+        rax;
+    requires
+        rax < 200;
+        g == rax;
+    ensures
+        rax == old(rax) + 1;
+{
+    Add64(rax, 1);
+}
+
+procedure Incr3(ghost g:int)
+    {:quick}
+    modifies
+        efl;
+        rax;
+    requires
+        rax < 100;
+        g == rax;
+    ensures
+        rax == old(rax) + 3;
+{
+    Add64(rax, 1);
+    AddRaxG(g + 1);
+    Add64(rax, 1);
+}
+
+procedure ModFlags()
+    {:quick}
+    modifies
+        efl;
+{
+}
+
+procedure While0(ghost g:int)
+    {:quick}
+    lets
+        x := g;
+    reads
+        rcx;
+    modifies
+        efl;
+        rax; rbx;
+    requires
+        rax < 200;
+        rbx < 100;
+        rcx < 300;
+{
+    Add64(rax, 0);
+    while (rax < rbx)
+        invariant
+            rax <= 200;
+            rbx <= 100;
+            rax >= old(rax);
+            rcx < 300;
+        decreases
+            200 - rax;
+    {
+//        assert x == g;
+        Add64(rax, 1);
+    }
+    while (rax < rbx)
+        invariant
+            rax >= rbx;
+        decreases 0;
+    {
+        ModFlags(); // HACK TODO: remove this: this is here only so the Vale retains "modifies efl" in the loop
+    }
+    Add64(rax, 3);
+}
+
+procedure While1(ghost g1:int) returns(ghost go:int)
+    {:quick}
+    modifies
+        efl;
+        rax; rbx;
+    requires
+        rax < 200;
+        rbx < 100;
+{
+    Add64(rax, 0);
+    let gc := g1;
+    ghost var g2:int := rax;
+    while (rax < rbx)
+        invariant
+            rax <= 200;
+            rbx <= 100;
+            g2 == rax;
+            g2 >= old(g2);
+            rax >= old(rax);
+            g1 == old(g1);
+        decreases
+            (200 - rax);
+    {
+        Add64(rax, 1);
+        g2 := g2 + 1;
+    }
+    assert g2 == rax;
+    Add64(rax, 3);
+    go := g2 + gc;
+}
+
+procedure While2(ghost g1:int) returns(ghost go:int)
+    {:quick}
+    modifies
+        efl;
+        rax; rbx;
+    requires
+        rax < 200;
+        rbx < 100;
+{
+    Add64(rax, 0);
+    let gc := g1;
+    ghost var g2:int := rax;
+    ghost var g3:int := rax;
+    while (rax < rbx)
+        invariant
+            rax <= 200;
+            rbx <= 100;
+            g2 == rax;
+            g2 >= old(g2);
+            g3 == rax;
+            rax >= old(rax);
+            g1 == old(g1);
+        decreases
+            (200 - rax);
+    {
+        Add64(rax, 1);
+        g2 := g2 + 1;
+        g3 := g3 + 1;
+    }
+    assert g2 == rax;
+    assert g3 == rax;
+    Add64(rax, 3);
+    go := g2 + gc;
+}
+
+procedure TestAssertTyping(ghost i:int) returns(ghost j:pos)
+    {:quick}
+    reads rax; rbx;
+    requires
+        i > 0;
+        rax > 0;
+        rbx > 0;
+{
+    assert{:quick_type} i > 0;
+    j := #pos(i);
+    let tmp := rax;
+    assert{:quick_type} tmp > 0;
+    j := #pos(tmp);
+    assert{:quick_type} rbx > 0;
+    j := #pos(rbx);
+}
+
+function normalize(p:prop):prop extern;
+
+ghost procedure assert_normalize(ghost p:prop)
+    requires
+        normalize(p);
+    ensures
+        p;
+{
+}
+
+procedure test_assert_norm()
+    {:quick}
+{
+    assert_normalize(pow2(16) == 0x10000);
+    assert pow2(16) == 0x10000;
+}
+
+#verbatim
+let freq (x y:int) : Pure int (requires x < y) (ensures fun _ -> True) = x + y
+
+[@"opaque_to_smt"]
+let freqo (x y:int) : Pure int (requires x < y) (ensures fun _ -> True) = x + y
+#endverbatim
+
+function freq(x:int, y:int):int
+    requires
+        x < y;
+    extern;
+
+function freqo(x:int, y:int):int
+    requires
+        x < y;
+    extern;
+
+procedure test_freq(ghost z:int)
+    {:quick}
+    requires
+        z == 3;
+{
+    assert freq(2, z) == 5;
+    reveal freqo(2, z);
+    assert freqo(2, z) == 5;
+    reveal freqo;
+    assert freqo(1, z + 1) == 5;
+    assert eq2(2, 2);
+}
+
+procedure test_arith(ghost x:pos)
+{
+    let a:nat := 2 * x;
+    let b:nat := x * x;
+}
+

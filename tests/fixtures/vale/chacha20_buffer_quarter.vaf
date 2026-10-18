@@ -1,0 +1,43 @@
+module ChaCha20_Buffer_Quarter;
+
+target aarch64;
+feature crypto, dit;
+
+procedure chacha20_quarter_round(
+    mut state: buffer<uint32>[16] @ r0
+)
+    modifies
+        r1; r2; r3; r4;
+{
+    // Load state words a, b, c, d
+    r1 := state[0];
+    r2 := state[4];
+    r3 := state[8];
+    r4 := state[12];
+
+    // Step 1: a += b; d ^= a; d <<<= 16
+    Add32(r1, r1, r2);
+    Xor32(r4, r4, r1);
+    Rol32(r4, r4, 16);
+
+    // Step 2: c += d; b ^= c; b <<<= 12
+    Add32(r3, r3, r4);
+    Xor32(r2, r2, r3);
+    Rol32(r2, r2, 12);
+
+    // Step 3: a += b; d ^= a; d <<<= 8
+    Add32(r1, r1, r2);
+    Xor32(r4, r4, r1);
+    Rol32(r4, r4, 8);
+
+    // Step 4: c += d; b ^= c; b <<<= 7
+    Add32(r3, r3, r4);
+    Xor32(r2, r2, r3);
+    Rol32(r2, r2, 7);
+
+    // Store back updated state words to buffer
+    state[0] := r1;
+    state[4] := r2;
+    state[8] := r3;
+    state[12] := r4;
+}

@@ -1,0 +1,240 @@
+module Types
+
+type byte:Type(0) := int_range(0, 0xff);
+type nat32:Type(0) := int_range(0, 0xffff_ffff);
+type list (a:Type(0)):Type(0) extern;
+type fake_list (a:Type(0)):Type(0) extern;
+
+function byte_test(x:byte, y:byte):byte extern;
+function id #[a:Type(0)](x:a):a extern;
+function nil #[a:Type(0)]():list(a) extern;
+function cons #[a:Type(0)](hd:a, tl:list(a)):list(a) extern;
+function operator(.field1) #[a:Type(0)](l:list(a)):bool extern;
+function operator(.field1) #[a:Type(0)](l:fake_list(a)):int extern;
+
+var ok:bool {:state ok()};
+var eax:int {:state reg(EAX)};
+var ebx:int {:state reg(EBX)};
+var esp:int {:state reg(ESP)};
+
+operand_type reg32:nat32 :=
+| inout eax
+| inout ebx
+;
+
+operand_type mem32:nat32;
+operand_type opr32:nat32 := reg32 | mem32 | in esp | const;
+
+procedure Expressions1(ghost x:int_range(10, 20)) returns(ghost y:int_range(15, 25))
+    {:typecheck}
+{
+    let a:bool := !true;
+    let b:prop := !a;
+    let c:prop := !b;
+    let d:int := 5;
+    let e:tuple(int, byte) := tuple(5, 5);
+    let f:tuple(int, byte) := let z := tuple(5, 5) in z;
+    let g:int_range((-20), (-10)) := (-x);
+    let h:int_range((-20), (-10)) := let z := x in (-z);
+    let i:int_range(13, 23) := x + 3;
+    let j:int_range(7, 17) := x - 3;
+    let k:int_range(30, 60) := x * 3;
+    let l:int_range(30, 60) := x + 2 * x;
+    let m:int_range(3, 6) := x / 3;
+    let n:int_range(0, 2) := x % 3;
+    let o:bool := a && a;
+    let p:prop := a && b;
+    let q:prop := b && a;
+    let r:prop := b && b;
+    let s:byte := if a then 10 else 20;
+    let t := if a then 10 else 20;
+    let u:byte := byte_test(x, byte_test(x, x));
+    let v:byte := id(u);
+    let w:tuple(byte, bool) := id(tuple(id(10), id(true)));
+    let x := id#[byte](10);
+    y := 20;
+}
+
+function ff(x1:byte, x2:byte, x3:byte, x4:byte):byte extern;
+
+procedure Expressions2(ghost x:int_range(10, 20), ghost fl:fake_list(int)) returns(ghost y:int_range(15, 25))
+    {:typecheck}
+    requires x >= 15;
+{
+    let a:list(byte) := nil();
+    let b := nil#[byte]();
+    let c := cons(100, cons(200, b));
+    let d:bool := c.field1;
+    let e:int := fl.field1;
+    let k:nat32 := id(5);
+    let j:nat32 := (let m:byte := id#[byte](5) in m);
+    let l:nat32 := id#[byte](5);
+    y := #int_range(15, 20)(x);
+    assert 7 < 8;
+    if (3 < 3) {}
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:int := 0;
+    a := 1; // not mutable
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let d := nil(); // needs type annotation on d or type argument to nil
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let b:list(int) := nil#[bool]();
+}
+
+procedure Fail(ghost x:int_range(10, 20)) returns(ghost y:int_range(15, 25))
+    {:typecheck}
+    {:testShouldFail}
+{
+    let t := 10;
+    y := t;
+}
+
+//This is now allowed:
+//procedure Fail(ghost x:int_range(10, 20)) returns(ghost y:int_range(15, 25))
+//    {:typecheck}
+//	{:testShouldFail}
+//    requires x >= 15;
+//{
+//    y := #int_range(15, 25)(x);
+//}
+
+// TODO: check that return values are assigned
+
+procedure Ghosts(ghost x:byte, ghost y:bool, inline z:byte)
+    {:typecheck}
+{
+}
+
+procedure Add(inout dst:opr32, in src:opr32)
+    {:typecheck}
+{
+}
+
+procedure Statements(ghost x:byte, inline z:byte, in o:reg32)
+    {:typecheck}
+    reads esp;
+    modifies eax; ebx;
+{
+    Ghosts(100, true, z);
+    Add(eax, esp);
+    Add(eax, id(id(5)));
+    Add(eax, id(id(z)));
+    Add(eax, id#[byte](id#[byte](5)) + 1);
+    Add(eax, id(id(5)) + 1);
+    Add(eax, 10);
+    Add(eax, ebx);
+    Add(eax, o);
+}
+
+procedure Fail(ghost x:byte, inline z:byte, in o:reg32)
+    {:typecheck}
+    {:testShouldFail}
+    reads esp;
+    modifies eax; ebx;
+{
+    Add(o, eax);
+}
+
+procedure Fail(ghost x:byte)
+    {:typecheck}
+    {:testShouldFail}
+    modifies eax; ebx; esp;
+{
+    Add(eax, id(id(x)));
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+    modifies eax; ebx; esp;
+{
+    Add(esp, eax);
+}
+
+procedure Fail(ghost x:byte, inline z:byte)
+    {:typecheck}
+    {:testShouldFail}
+    modifies eax; ebx;
+{
+    Ghosts(100, true, x);
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:byte := byte_test(5);
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:byte := byte_test(200, 500);
+}
+
+procedure Fail(ghost x:int_range(10, 20)) returns(ghost y:int_range(15, 25))
+    {:typecheck}
+    {:testShouldFail}
+{
+    y := x;
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:bool := !5;
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:prop := !true;
+    let b:bool := !a;
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:prop := !true;
+    let b:bool := a && true;
+}
+
+procedure Fail(in p:prop)
+    {:typecheck}
+    {:testShouldFail}
+{
+    let a:int := if p then 10 else 10;
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let e:tuple(int, byte) := tuple(5, 555);
+}
+
+procedure Fail()
+    {:typecheck}
+    {:testShouldFail}
+{
+    let y:bool := id(100);
+}

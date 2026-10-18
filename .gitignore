@@ -1,0 +1,40 @@
+# Binary outputs
+bin/
+dist/vale-compiler
+
+# Build & Test output directories
+dist/out/
+dist/test_out/
+dist/pulse_test/
+dist/extracted/
+
+doc/
+tmp/
+
+# OCaml compiled object files and libraries
+*.cmi
+*.cmo
+*.cmx
+*.o
+*.a
+*.cmxa
+*.s
+
+# Generated parser & lexer files
+src/parser/parse.ml
+src/parser/parse.mli
+src/parser/lex.ml
+src/parser/test_parse
+src/parser/dump_tokens
+
+# F* / Pulse checked caches and hints
+*.checked
+*.checked.relax
+.cache/
+*.krml
+
+# Temporary and editor files
+*~
+*.swp
+*.swo
+.DS_Store

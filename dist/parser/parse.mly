@@ -1,0 +1,555 @@
+%{
+
+open Ast
+open Ast_util
+open Parse_util
+
+
+let makeUop (op:uop) ((loc:loc), ((isCustom:bool), (s:string))) (e:exp):exp =
+  let op = if isCustom then UCustom s else op in
+  ELoc (loc, EOp (Uop op, [e], None))
+
+let makeBop (op:bop) ((loc:loc), ((isCustom:bool), (s:string))) (e1:exp) (e2:exp):exp =
+  let op = if isCustom then BCustom s else op in
+  ELoc (loc, EOp (Bop op, [e1; e2], None))
+
+let hasStorageAttr (a:attrs):bool =
+  let rec r (a:attrs):bool =
+    (* Note: XPhysical Parameters need to be annotated explicitly *)
+    match a with
+    | [] -> false
+    | (Id ("thread_local" | "register"), [e])::a -> true
+    | (Id "local", [e])::a -> true
+    | (Id "state", [e])::a -> true
+    | attr::a -> (r a)
+  in
+  (r a)
+
+let storageAttrs (a:attrs):(var_storage * attrs) =
+  let rec r (a:attrs):(var_storage list * attrs) list =
+    match a with
+    | [] -> [[], []]
+    | (Id ("thread_local" | "register"), [e])::a -> ([XAlias (AliasThread, e)], [])::(r a)
+    | (Id "local", [e])::a -> ([XAlias (AliasLocal, e)], [])::(r a)
+    | (Id "state", [e])::a -> ([XState e], [])::(r a)
+    | attr::a -> ([], [attr])::(r a)
+  in
+  let (s, a) = List.split (r a) in
+  match (List.concat s, List.concat a) with
+  | ([], a) -> (XPhysical, a)
+  | ([s], a) -> (s, a)
+  | (_::_, a) -> parse_err "more than one storage specifier for variable"
+%}
+
+%start start
+%type <Ast.include_decl list * Ast.decls> start
+
+%token <Ast.loc * string> ID
+%token <Ast.loc * Z.t> LITINT
+%token <Ast.loc * string> LITREAL
+%token <Ast.loc * bool> LITBOOL
+%token <Ast.loc * int> BV
+%token <Ast.loc> INT INT_RANGE BOOL PROP TUPLE
+%token <Ast.loc> QLBRACKET HASHLBRACKET LBRACKET RBRACKET LBRACE RBRACE LPAREN RPAREN LBRACECOLON
+%token <Ast.loc> AT COMMA DOT HASH MINUSGT
+%token <Ast.loc * (bool * string)> BANG BAR
+%token <Ast.loc * (bool * string)> LT GT EQ LE GE EQEQ NE
+%token <Ast.loc * (bool * string)> PLUS MINUS STAR SLASH PERCENT
+%token <Ast.loc * (bool * string)> AMPAMP BARBAR LTEQEQ EQEQGT LTEQEQGT
+%token <Ast.loc * (bool * string)> ATEQ COLONEQ
+%token <Ast.loc> HAVOC OLD THIS
+%token <Ast.loc> IS THEN ELSE LET IN OUT INOUT MUT REVEAL GHOST INLINE
+%token <Ast.loc> TTYPE TYPE OPERAND_TYPE VAR CONST READONLY FUNCTION AXIOM EXTERN PROCEDURE STATIC MODULE IMPORT OPERATOR TARGET FEATURE
+%token <Ast.loc> DDEPENDENT DEPENDENT
+%token <Ast.loc> LEMMA CALL RETURN IF WHILE FOR GOTO ASSERT IMPLIES BY ASSUME CALC DECREASES INVARIANT COLON YIELD SEMI
+%token <Ast.loc> RETURNS LETS REQUIRES ENSURES READS MODIFIES PRESERVES
+%token <Ast.loc> FORALL EXISTS FUN
+%token <Ast.loc> INCLUDE
+%token <Ast.loc * string> STRING
+%token <Ast.loc> VERBATIM
+%token <string list> VERBATIM_BLOCK
+
+%token EOF
+
+/* Precedence declarations. */
+
+%left LTEQEQGT
+%right EQEQGT
+%left LTEQEQ
+%left BARBAR
+%left AMPAMP
+%left EQEQ EQ NE
+%left LT GT LE GE IS
+%left PLUS MINUS
+%left STAR SLASH PERCENT
+%right BANG HASH
+%left LPAREN RPAREN HASHLBRACKET QLBRACKET LBRACKET RBRACKET DOT
+
+%%
+
+start: Includes Decls EOF { ($1, $2) }
+
+Include
+  : INCLUDE Attrs STRING { {inc_loc = $1; inc_attrs = $2; inc_path = snd $3} }
+
+Includes
+  : { [] }
+  | Include Includes { $1::$2 }
+
+Kind
+  : LPAREN Kind RPAREN { $2 }
+  | TTYPE LPAREN LITINT RPAREN { KType (snd $3) }
+  | DDEPENDENT LPAREN AnyQualifiedId RPAREN { KDependent $3 }
+
+Type
+  : Type1 { $1 }
+  | FUN LPAREN TypeArgsOpt RPAREN MINUSGT Type { TFun ($3, $6) }
+Type1
+  : Type2 { $1 }
+  | AnyQualifiedId LPAREN TypeArgsOpt RPAREN { TApply ($1, $3) }
+  | AnyQualifiedId LT TypeArgsOpt GT { TApply ($1, $3) }
+  | Type1 LBRACKET Exp RBRACKET
+    {
+      let sz = match skip_loc $3 with
+        | EInt n -> Z.to_string n
+        | EVar (Id s, _) -> s
+        | _ -> "0"
+      in
+      TApply (Id "buffer", [$1; TName (Id sz)])
+    }
+Type2
+  : LPAREN Type RPAREN { $2 }
+  | AnyQualifiedId { TName $1 }
+  | INT { TInt (NegInf, Inf) }
+  | INT_RANGE LPAREN Underscore COMMA Int RPAREN { TInt (NegInf, Int (snd $5))}
+  | INT_RANGE LPAREN Int COMMA Underscore RPAREN { TInt (Int (snd $3), Inf)}
+  | INT_RANGE LPAREN Int COMMA Int RPAREN { TInt (Int (snd $3), Int(snd $5))}
+  | DEPENDENT LPAREN AnyQualifiedId RPAREN { TDependent $3 }
+  | TUPLE LPAREN TypeArgsOpt RPAREN { TTuple $3 }
+  | BOOL { TBool BpBool }
+  | PROP { TBool BpProp }
+
+Underscore
+  : AnyId { if $1 = Id "_" then () else parse_err "expected _ or integer literal" }
+
+Int
+  : LITINT { $1 }
+  | LPAREN MINUS LITINT RPAREN { ($1, Z.neg (snd $3)) }
+
+TypeArgs
+  : Type { [$1] }
+  | Type COMMA TypeArgs { $1::$3 }
+TypeArgsOpt : { [] } | TypeArgs { $1 }
+
+Triggers
+  : { [] }
+  | LBRACE Exps1 RBRACE Triggers { $2::$4 }
+
+BindOp
+  : FORALL { Forall }
+  | EXISTS { Exists }
+  | FUN { Lambda }
+
+Exp
+  : Exp1 { $1 }
+  | IF Exp THEN Exp ELSE Exp { EOp (Cond, [$2; $4; $6], None) }
+  | LET Formal COLONEQ Exp IN Exp { EBind (BindLet, [$4], [$2], [], $6, None) }
+  | BindOp LPAREN Formals RPAREN Triggers Exp { EBind ($1, [], $3, $5, $6, None) }
+
+Exp1
+  : LPAREN Exp RPAREN { $2 }
+  | Exp1 LTEQEQGT Exp1 { makeBop BEquiv $2 $1 $3 }
+  | Exp1 EQEQGT Exp1 { makeBop BImply $2 $1 $3 }
+  | Exp1 LTEQEQ Exp1 { makeBop BExply $2 $1 $3 }
+  | Exp1 AMPAMP Exp1 { makeBop (BAnd BpBool) $2 $1 $3 }
+  | Exp1 BARBAR Exp1 { makeBop (BOr BpBool) $2 $1 $3 }
+  | Exp1 EQEQ Exp1 { makeBop (BEq BpProp) $2 $1 $3 }
+  | Exp1 EQ Exp1 { makeBop (BEq BpBool) $2 $1 $3 }
+  | Exp1 NE Exp1 { makeBop (BNe BpProp) $2 $1 $3 }
+  | Exp1 LT Exp1 { makeBop BLt $2 $1 $3 }
+  | Exp1 GT Exp1 { makeBop BGt $2 $1 $3 }
+  | Exp1 LE Exp1 { makeBop BLe $2 $1 $3 }
+  | Exp1 GE Exp1 { makeBop BGe $2 $1 $3 }
+  | Exp1 IS AnyId { expAt $2 (EOp (Uop (UIs $3), [$1], None)) }
+  | Exp1 PLUS Exp1 { makeBop BAdd $2 $1 $3 }
+  | Exp1 MINUS Exp1 { makeBop BSub $2 $1 $3 }
+  | Exp1 STAR Exp1 { makeBop BMul $2 $1 $3 }
+  | Exp1 SLASH Exp1 { makeBop BDiv $2 $1 $3 }
+  | Exp1 PERCENT Exp1 { makeBop BMod $2 $1 $3 }
+  | LPAREN MINUS Exp1 RPAREN { makeUop UNeg $2 $3 }
+  | BANG Exp1 { makeUop (UNot BpProp) $1 $2 }
+  | Exp1 QLBRACKET Exp RBRACKET { expAt $2 (EOp (Bop BIn, [$3; $1], None)) }
+  | Exp1 LBRACKET Exp RBRACKET { expAt $2 (EOp (Subscript, [$1; $3], None)) }
+  | Exp1 LBRACKET Exp COLONEQ Exp RBRACKET { expAt $2 (EOp (Update, [$1; $3; $5], None)) }
+  | Exp1 DOT AnyId { expAt $2 (EOp (FieldOp $3, [$1], None)) }
+  | Exp1 DOT AnyId LPAREN Exps RPAREN { expAt $4 (EApply (EVar (exp2id $1 $3, None), None, $5, None)) }
+  | Exp1 DOT LPAREN AnyId COLONEQ Exp RPAREN { expAt $2 (EOp (FieldUpdate $4, [$1; $6], None)) }
+  | LITBOOL { expAt (fst $1) (EBool (snd $1)) }
+  | LITINT { expAt (fst $1) (EInt (snd $1)) }
+  | LITREAL { expAt (fst $1) (EReal (snd $1)) }
+  | STRING { expAt (fst $1) (EString (snd $1)) }
+  | BV LPAREN LITINT RPAREN { expAt (fst $1) (EBitVector (snd $1, snd $3)) }
+  | OLD LPAREN Exp RPAREN { expAt $1 (EOp (Uop UOld, [$3], None)) }
+  | OLD LBRACKET Exp RBRACKET LPAREN Exp RPAREN { expAt $1 (EOp (Bop BOldAt, [$3; $6], None)) }
+  | CONST LPAREN Exp RPAREN { expAt $1 (EOp (Uop UConst, [$3], None)) }
+  | THIS { expAt $1 (EVar (Reserved "this", None)) }
+  | HASH Type2 LPAREN Exp RPAREN { expAt $1 (ECast (Downcast, $4, $2))  }
+  | Exp1 HASHLBRACKET TypeArgsOpt RBRACKET LPAREN Exps RPAREN
+    {
+      let ts = List.map (fun t -> (TqImplicit, t)) $3 in
+      expAt $2 (EApply ($1, Some ts, $6, None))
+    }
+  | Exp1 LPAREN Exps RPAREN { expAt $2 (EApply ($1, None, $3, None)) }
+  | TUPLE LPAREN Exps RPAREN { expAt $1 (EOp (TupleOp None, $3, None)) }
+  | ID { expAt (fst $1) (EVar (Id (snd $1), None)) }
+  | AT ID { expAt $1 (EOp (Uop UToOperand, [expAt (fst $2) (EVar (Id (snd $2), None))], None)) }
+Exps1
+  : Exp { [$1] }
+  | Exp COMMA Exps1 { $1::$3 }
+Exps
+  : { [] }
+  | Exps1 { $1 }
+AnyId
+  : ID { Id (snd $1) }
+AnyIds1
+  : AnyId { [$1] }
+  | AnyId COMMA AnyIds1 { $1::$3 }
+AnyIds
+  : { [] }
+  | AnyIds1 { $1 }
+AnyQualifiedId
+  : AnyId { $1 }
+  | AnyQualifiedId DOT ID { Id ((string_of_id $1) ^ "." ^ (snd $3)) }
+
+OpToken
+  : BANG { $1 }
+  | STAR { $1 }
+  | SLASH { $1 }
+  | PERCENT { $1 }
+  | PLUS { $1 }
+  | MINUS { $1 }
+  | LT { $1 }
+  | GT { $1 }
+  | EQ { $1 }
+  | COLONEQ { $1 }
+  | LE { $1 }
+  | GE { $1 }
+  | EQEQ { $1 }
+  | NE { $1 }
+  | AMPAMP { $1 }
+  | BARBAR { $1 }
+  | LTEQEQ { $1 }
+  | EQEQGT { $1 }
+  | LTEQEQGT { $1 }
+  | LBRACKET RBRACKET { ($1, (false, "[]")) }
+  | LBRACKET COLONEQ RBRACKET { ($1, (false, "[:=]")) }
+  | QLBRACKET RBRACKET { ($1, (false, "?[]")) }
+  | DOT ID { ($1, (false, "." ^ (snd $2) )) }
+  | DOT ID COLONEQ { ($1, (false, "." ^ (snd $2) ^ ":=")) }
+AnyIdOrOp
+  : AnyQualifiedId { $1 }
+  | OPERATOR LPAREN OpToken RPAREN { let (_, (_, s)) = $3 in Operator s }
+CalcOp
+  : LTEQEQGT { BEquiv }
+  | EQEQGT { BImply }
+  | LTEQEQ { BExply }
+  | AMPAMP { BAnd BpBool }
+  | BARBAR { BOr BpBool }
+  | EQEQ { BEq BpProp }
+  | EQ { BEq BpBool }
+  | LT { BLt }
+  | GT { BGt }
+  | LE { BLe }
+  | GE { BGe }
+
+Attrs
+  : { [] }
+  | LBRACECOLON AnyId Exps RBRACE Attrs { ($2, $3)::$5 }
+
+GhostOpt: { NotGhost } | GHOST { Ghost }
+StmtModifier: { SmPlain } | GHOST { SmGhost } | INLINE { SmInline }
+
+/* TODO: remove this
+ExpCall
+  : { fun e -> e }
+  | GHOST { fun e -> EOp (Uop (UCall CallGhost), [e], None) }
+  | LEMMA { fun e -> EOp (Uop (UCall CallLemma), [e], None) }
+  | INLINE { fun e -> EOp (Uop (UCall CallInline), [e], None) }
+  | CALL { fun e -> EOp (Uop (UCall CallOutline), [e], None) }
+*/
+
+VarAttrs
+  : GHOST VAR Attrs { ($1, XGhost, $3) }
+VarInit
+  : { None }
+  | COLONEQ Exp { Some $2 }
+VarType
+  : { None }
+  | COLON Type { Some $2 }
+
+Lhs
+// TODO:  : Exp1 { ($1, None) }
+  : AnyId { ($1, None) }
+  | THIS { (Reserved "this", None) }
+  | LPAREN LET AnyId VarType RPAREN { ($3, Some ($4, Ghost)) }
+Lhss1
+  : Lhs { [$1] }
+  | Lhs COMMA Lhss1 { $1::$3 }
+
+Decreases
+  : { parse_err "a while loop must contain zero or more invariants followed by exactly one decreases clause" }
+  | DECREASES STAR SEMI { ($1, []) }
+  | DECREASES Exps1 SEMI { ($1, $2) }
+
+ExpAssign
+  : Lhss1 COLONEQ Exp
+    {
+      let (loc, (_, s)) = $2 in
+      stmtAt loc (SAssign ($1, $3))
+    }
+
+Stmt
+  : ID COLON { stmtAt (fst $1) (SLabel (Id (snd $1))) }
+  | GOTO AnyId SEMI { stmtAt $1 (SGoto $2) }
+  | RETURN SEMI { stmtAt $1 SReturn }
+  | StmtModifier IfStmt { $2 $1 }
+  | WHILE LPAREN Exp RPAREN Invariants Decreases LBRACE Block RBRACE
+    {
+      stmtAt $1 (SWhile ($3, exps_of_spec_exps $5, $6, $8))
+    }
+  | FORALL LPAREN Formals RPAREN Triggers Exp BY LBRACE Block RBRACE
+    {
+      stmtAt $1 (SForall ($3, $5, EBool true, $6, $9))
+    }
+  | FORALL LPAREN Formals RPAREN Triggers Exp IMPLIES Exp BY LBRACE Block RBRACE
+    {
+      stmtAt $1 (SForall ($3, $5, $6, $8, $11))
+    }
+  | LET EXISTS LPAREN Formals RPAREN Triggers Exp SEMI { stmtAt $1 (SExists ($4, $6, $7)) }
+  | INVARIANT Exp SEMI { stmtAt $1 (SAssert ({assert_attrs_default with is_inv = true}, $2)) }
+  | ASSUME Exp SEMI { stmtAt $1 (SAssume $2) }
+  | ASSERT Exp SEMI { stmtAt $1 (SAssert (assert_attrs_default, $2)) }
+  | ASSERT Exp BY LBRACE Block RBRACE { stmtAt $1 (SForall ([], [], EBool true, $2, $5)) }
+  | ASSERT Exp IMPLIES Exp BY LBRACE Block RBRACE { stmtAt $1 (SForall ([], [], $2, $4, $7)) }
+  | ASSERT LBRACECOLON AnyId RBRACE Exp SEMI
+    {
+      let attrs =
+        match ($3, skip_loc $5) with
+        | (Id "split_here", EBool true) -> {assert_attrs_default with is_split = true}
+        | (Id "quick_type", _) -> {assert_attrs_default with is_quicktype = Some false}
+        | _ -> parse_err ("unknown attribute: " ^ (err_id $3))
+        in
+      stmtAt $1 (SAssert (attrs, $5))
+    }
+  | CALC CalcOp LBRACE CalcContents RBRACE { let (l, e) = $4 in stmtAt $1 (SCalc ($2, l, e)) }
+  | REVEAL AnyId SEMI { stmtAt $1 (SAssign ([], EOp (Uop UReveal, [EVar ($2, None)], None))) }
+  | REVEAL AnyId LPAREN Exps RPAREN SEMI
+    {
+      stmtAt $1 (SAssign ([], EOp (Uop UReveal, [(EApply (EVar ($2, None), None, $4, None))], None)))
+    }
+  | VarAttrs AnyId VarType VarInit SEMI { let (l, g, a) = $1 in stmtAt l (SVar ($2, $3, Mutable, g, a, $4)) }
+  | LET Formal COLONEQ Exp SEMI { let (x, t) = $2 in stmtAt $1 (SVar (x, t, Immutable, XGhost, [], Some $4)) }
+  | LET AnyId ATEQ AnyId SEMI { stmtAt $1 (SAlias ($2, $4)) }
+  | LET LPAREN Formals RPAREN COLONEQ Exp SEMI
+    {
+      let lhss = List.map (fun (x, t) -> (x, Some (t, Ghost))) $3 in
+      stmtAt $1 (SAssign (lhss, $6))
+    }
+  | ExpAssign SEMI { $1 }
+  | Exp1 LBRACKET Exp RBRACKET COLONEQ Exp SEMI
+    {
+      stmtAt (fst $5) (SAssign ([], EOp (Update, [$1; $3; $6], None)))
+    }
+  | Exp1 SEMI { stmtAt (one_loc_of_exp $2 $1) (SAssign ([], $1)) }
+IfStmt
+  : IF LPAREN Exp RPAREN LBRACE Block RBRACE ElseOpt
+    {
+      fun sm -> stmtAt $2 (SIfElse (sm, $3, $6, $8 sm))
+    }
+ElseOpt
+  : { fun sm -> [] }
+  | ELSE LBRACE Block RBRACE { fun sm -> $3 }
+  | ELSE IfStmt { $2 }
+CalcHints
+  : { [] }
+  | LBRACE Block RBRACE CalcHints { $2::$4 }
+CalcContents
+  : Exp SEMI { ([], $1) }
+  | Exp SEMI CalcOp CalcHints CalcContents { let (l, e) = $5 in ({calc_exp = $1; calc_op = $3; calc_hints = $4} :: l, e)}
+
+Block
+  : { [] }
+  | Stmt Block { $1 @ $2 }
+
+Formal
+  : AnyId { ($1, None) }
+  | AnyId COLON Type { ($1, Some $3) }
+Formals1
+  : Formal { [$1] }
+  | Formal COMMA Formals1 { $1::$3 }
+Formals
+  : { [] }
+  | Formals1 { $1 }
+
+TFormal
+  : AnyId COLON Kind { ($1, $3, InferExplicit) }
+  | HASH AnyId COLON Kind { ($2, $4, InferImplicit) }
+TFormals1
+  : TFormal { [$1] }
+  | TFormal COMMA TFormals1 { $1::$3 }
+TFormals
+  : { [] }
+  | TFormals1 { $1 }
+TFormalsBracket
+  : { [] }
+  | HASHLBRACKET TFormals RBRACKET { $2 }
+TFormalsParen
+  : { None }
+  | LPAREN TFormals RPAREN { Some $2 }
+
+InOut
+  : IN { In }
+  | OUT { Out }
+  | INOUT { InOut }
+ProcFormal
+  : InOut Attrs AnyId COLON Type { if hasStorageAttr $2 then let (s, a) = storageAttrs $2 in ($3, $5, s, $1, a) else ($3, $5, XOperand, $1, $2) }
+  | MUT Attrs AnyId COLON Type AT AnyId { ($3, $5, XPhysical, InOut, (Reserved "reg_bind", [EVar ($7, None)])::$2) }
+  | MUT Attrs AnyId COLON Type { ($3, $5, XPhysical, InOut, $2) }
+  | GHOST Attrs AnyId COLON Type { ($3, $5, XGhost, In, $2) }
+  | INLINE Attrs AnyId COLON Type { ($3, $5, XInline, In, $2) }
+ProcFormals1
+  : ProcFormal { [$1] }
+  | ProcFormal COMMA ProcFormals1 { $1::$3 }
+ProcFormals
+  : { [] }
+  | ProcFormals1 { $1 }
+
+LetBind
+  : Formal COLONEQ Exp SEMI { let (x, t) = $1 in (fst $2, LetsVar (x, t, $3)) }
+  | AnyId ATEQ AnyId SEMI { (fst $2, LetsAlias ($1, $3)) }
+
+LetBinds
+  : { [] }
+  | LetBind LetBinds { $1::$2 }
+
+SemiExp
+  : Exp SEMI { ($2, SpecExp $1) }
+  | LET Formal COLONEQ Exp SEMI { let (x, t) = $2 in ($1, SpecLet (x, t, $4)) }
+
+SemiExps
+  : { [] }
+  | SemiExp SemiExps { $1::$2 }
+
+Req: REQUIRES Attrs {}
+
+SpecRaw
+  : LETS LetBinds { ($1, Lets $2) }
+  | REQUIRES SemiExps { ($1, RawSpec (RRequires Refined, $2)) }
+  | ENSURES SemiExps { ($1, RawSpec (REnsures Refined, $2)) }
+  | REQUIRES SLASH ENSURES SemiExps { ($1, RawSpec (RRequiresEnsures, $4)) }
+  | READS SemiExps { ($1, RawSpec (RModifies Read, $2)) }
+  | MODIFIES SemiExps { ($1, RawSpec (RModifies Modify, $2)) }
+  | PRESERVES SemiExps { ($1, RawSpec (RModifies Preserve, $2)) }
+Specs
+  : { [] }
+  | SpecRaw Specs { let (loc, s) = $1 in (loc, SpecRaw s)::$2 }
+
+Invariants
+  : { [] }
+  | INVARIANT SemiExps Invariants { $2 @ $3 }
+
+OperandTypeInclude
+  : CONST { OT_Const }
+  | AnyId { OT_Name $1 }
+  | IN AnyId { OT_State (In, $2) }
+  | OUT AnyId { OT_State (Out, $2) }
+  | INOUT AnyId { OT_State (InOut, $2) }
+OperandTypeIncludes1
+  : OperandTypeInclude { [$1] }
+  | OperandTypeInclude BAR OperandTypeIncludes1 { $1::$3 }
+OperandTypeIncludes
+  : OperandTypeIncludes1 { $1 }
+  | BAR OperandTypeIncludes1 { $2 }
+
+OperandTypeAt
+  : { None }
+  | AT Type { Some $2 }
+ProcFormalsOpt
+  : { None }
+  | LPAREN ProcFormals RPAREN { Some $2 }
+
+Proc
+  : GhostOpt PROCEDURE { ($2, $1) }
+FunRet
+  : Type { (None, $1) }
+  | LPAREN AnyId COLON Type RPAREN { (Some $2, $4) }
+
+ProcRet
+  : Attrs AnyId COLON Type { if hasStorageAttr $1 then let (s, a) = storageAttrs $1 in ($2, $4, s, Out, a) else ($2, $4, XOperand, Out, $1) }
+  | GHOST Attrs AnyId COLON Type { ($3, $5, XGhost, Out, $2) }
+ProcRets1
+  : ProcRet { [$1] }
+  | ProcRet COMMA ProcRets1 { $1::$3 }
+ProcRets
+  : { [] }
+  | RETURNS LPAREN ProcRets1 RPAREN { $3 }
+Decl
+  : VERBATIM Attrs VERBATIM_BLOCK
+    {
+      ($1, DVerbatim ($2, $3))
+    }
+  | MODULE AnyQualifiedId { ($1, DPragma (ModuleName (string_of_id $2))) }
+  | MODULE AnyQualifiedId SEMI { ($1, DPragma (ModuleName (string_of_id $2))) }
+  | TARGET AnyQualifiedId SEMI { ($1, DPragma (Target (string_of_id $2))) }
+  | FEATURE Exps SEMI { ($1, DPragma (Feature (List.map (function EVar (x, _) -> string_of_id x | ELoc (_, EVar (x, _)) -> string_of_id x | _ -> "") $2))) }
+  | TYPE AnyQualifiedId TFormalsParen COLON Kind Attrs EXTERN SEMI { ($1, DType ($2, $3, $5, None, $6)) }
+  | TYPE AnyQualifiedId TFormalsParen COLON Kind Attrs COLONEQ Type SEMI { ($1, DType ($2, $3, $5, Some $8, $6)) }
+  | OPERAND_TYPE AnyQualifiedId ProcFormalsOpt COLON Type OperandTypeAt SEMI { ($1, DOperandType ($2, $3, $5, $6, [])) }
+  | OPERAND_TYPE AnyQualifiedId ProcFormalsOpt COLON Type OperandTypeAt COLONEQ OperandTypeIncludes SEMI { ($1, DOperandType ($2, $3, $5, $6, $8)) }
+  | VAR AnyId COLON Type Attrs SEMI { let (s, a) = storageAttrs $5 in ($1, DVar ($2, $4, s, a)) }
+	| CONST AnyQualifiedId COLON Type Attrs EXTERN SEMI
+    {
+      match $5 with
+      | [(Id "unsupported", [EString s | ELoc (_, EString s)])] -> ($1, DUnsupported ($2, Some s))
+      | [(Id "unsupported", _)] -> ($1, DUnsupported ($2, None))
+      | _ -> ($1, DConst ($2, $4))
+    }
+  | FUNCTION AnyIdOrOp TFormalsBracket LPAREN Formals RPAREN COLON FunRet Attrs COLONEQ AnyId SEMI
+    { ($1, DFun {
+        fname = $2;
+        fghost = Ghost;
+        ftargs = $3;
+        fargs = $5;
+        fret_name = fst $8;
+        fret = snd $8;
+        fspecs = [];
+        fbody = None;
+        fattrs = (Reserved "alias", [EVar ($11, None)])::$9}
+      )
+    }
+  | FUNCTION AnyIdOrOp TFormalsBracket LPAREN Formals RPAREN COLON FunRet Attrs Specs EXTERN SEMI
+    { ($1, DFun {
+        fname = $2;
+        fghost = Ghost;
+        ftargs = $3;
+        fargs = $5;
+        fret_name = fst $8;
+        fret = snd $8;
+        fspecs = $10;
+        fbody = None;
+        fattrs = $9}
+      )
+    }
+  | Proc AnyIdOrOp TFormalsBracket LPAREN ProcFormals RPAREN ProcRets Attrs Specs EXTERN SEMI
+    {
+      (fst $1, DProc {pname = $2; pghost = snd $1; pinline = Inline; ptargs = $3; pargs = $5; prets = $7; pspecs = $9; pbody = None; pattrs = $8})
+    }
+  | Proc AnyIdOrOp TFormalsBracket LPAREN ProcFormals RPAREN ProcRets Attrs Specs LBRACE Block RBRACE
+    {
+      (fst $1, DProc {pname = $2; pghost = snd $1; pinline = Inline; ptargs = $3; pargs = $5; prets = $7; pspecs = $9; pbody = Some $11; pattrs = $8})
+    }
+
+Decls
+  : { [] }
+  | Decl Decls { $1::$2 }
+
